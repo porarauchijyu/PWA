@@ -3,189 +3,254 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Mobile ToDo Pro</title>
-    <!-- Tailwind CSS for modern UI -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PWA Scheduler</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- PWA Manifest Definition (Data URI) -->
-    <link rel="manifest" id="pwa-manifest">
-    <meta name="theme-color" content="#3b82f6">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#4f46e5">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
         body {
             font-family: 'Inter', sans-serif;
-            -webkit-tap-highlight-color: transparent;
-            overscroll-behavior-y: contain;
         }
 
-        .safe-area-bottom {
-            padding-bottom: env(safe-area-inset-bottom);
+        .safe-area-inset {
+            padding-top: env(safe-area-inset-top);
+        }
+
+        .task-done {
+            text-decoration: line-through;
+            opacity: 0.6;
         }
     </style>
 </head>
 
-<body class="bg-slate-50 min-h-screen flex flex-col">
+<body class="bg-slate-50 min-h-screen text-slate-900">
 
-    <!-- Header -->
-    <header class="bg-blue-600 text-white p-6 pt-12 shadow-lg sticky top-0 z-10">
-        <h1 class="text-2xl font-bold tracking-tight">My Tasks</h1>
-        <p class="text-blue-100 text-sm opacity-80" id="date-display"></p>
-    </header>
+    <!-- App Container -->
+    <div id="app" class="max-w-md mx-auto min-h-screen flex flex-col shadow-xl bg-white">
 
-    <!-- Main Content -->
-    <main class="flex-grow p-4 space-y-4 mb-24">
-        <!-- Input Area -->
-        <div class="bg-white rounded-2xl shadow-sm p-4 border border-slate-100">
-            <div class="flex gap-2">
-                <input type="text" id="taskInput"
-                    class="flex-grow px-4 py-3 bg-slate-50 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                    placeholder="新しいタスクを入力...">
-                <button onclick="addTask()"
-                    class="bg-blue-600 text-white px-5 py-3 rounded-xl font-semibold active:scale-95 transition-transform shadow-md">
-                    追加
+        <!-- Header -->
+        <header class="bg-indigo-600 text-white p-6 rounded-b-3xl shadow-lg safe-area-inset">
+            <div class="flex justify-between items-center mb-4">
+                <h1 class="text-2xl font-bold flex items-center gap-2">
+                    <i data-lucide="calendar"></i> 予定表
+                </h1>
+                <button id="installBtn"
+                    class="hidden bg-white/20 hover:bg-white/30 px-3 py-1 rounded-full text-sm transition-all">
+                    アプリをインストール
                 </button>
+            </div>
+            <div id="currentDate" class="text-indigo-100 text-sm font-medium"></div>
+        </header>
+
+        <!-- Stats Bar -->
+        <div class="px-6 -mt-4">
+            <div class="bg-white rounded-2xl p-4 shadow-md flex justify-around items-center border border-slate-100">
+                <div class="text-center">
+                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">残り</p>
+                    <p id="pendingCount" class="text-xl font-bold text-indigo-600">0</p>
+                </div>
+                <div class="h-8 w-px bg-slate-100"></div>
+                <div class="text-center">
+                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">完了</p>
+                    <p id="completedCount" class="text-xl font-bold text-emerald-500">0</p>
+                </div>
             </div>
         </div>
 
         <!-- Task List -->
-        <ul id="taskList" class="space-y-3">
-            <!-- Tasks will appear here -->
-        </ul>
-
-        <!-- Empty State -->
-        <div id="emptyState" class="text-center py-10 hidden">
-            <div class="text-5xl mb-4">📝</div>
-            <p class="text-slate-400">タスクはありません</p>
-        </div>
-    </main>
-
-    <!-- App Install Banner (Custom) -->
-    <div id="installBanner"
-        class="fixed bottom-6 left-4 right-4 bg-slate-800 text-white p-4 rounded-2xl shadow-2xl flex items-center justify-between hidden z-50 transition-all transform translate-y-0">
-        <div class="flex items-center gap-3">
-            <div class="bg-blue-500 p-2 rounded-lg">📱</div>
-            <div>
-                <p class="font-bold text-sm">アプリをインストール</p>
-                <p class="text-xs text-slate-300">ホーム画面からすぐ起動</p>
+        <main class="flex-grow p-6 overflow-y-auto">
+            <div id="taskList" class="space-y-3">
+                <!-- Tasks will be injected here -->
+                <div id="emptyState" class="text-center py-10 text-slate-400">
+                    <i data-lucide="inbox" class="mx-auto mb-2 opacity-20" size="48"></i>
+                    <p>予定がありません</p>
+                </div>
             </div>
-        </div>
-        <button id="installBtn" class="bg-blue-500 px-4 py-2 rounded-lg text-sm font-bold">追加</button>
+        </main>
+
+        <!-- Input Area (Fixed at bottom) -->
+        <footer class="p-6 bg-slate-50 border-t border-slate-100">
+            <div class="flex gap-2">
+                <input type="text" id="taskInput" placeholder="新しい予定を入力..."
+                    class="flex-grow px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all">
+                <button id="addBtn"
+                    class="bg-indigo-600 text-white p-3 rounded-xl hover:bg-indigo-700 active:scale-95 transition-all shadow-md shadow-indigo-200">
+                    <i data-lucide="plus"></i>
+                </button>
+            </div>
+        </footer>
     </div>
 
+    <!-- PWA Infrastructure -->
     <script>
-        // 1. Setup PWA Manifest dynamically
+        // 1. Web App Manifest dynamic generation
         const manifest = {
-            "short_name": "ToDoPro",
-            "name": "Mobile ToDo Professional",
-            "icons": [
-                {
-                    "src": "https://cdn-icons-png.flaticon.com/512/4697/4697260.png",
-                    "type": "image/png",
-                    "sizes": "512x512",
-                    "purpose": "any maskable"
-                }
-            ],
+            "name": "PWA Scheduler Sample",
+            "short_name": "予定表",
             "start_url": ".",
             "display": "standalone",
-            "background_color": "#f8fafc",
-            "theme_color": "#2563eb"
+            "background_color": "#ffffff",
+            "theme_color": "#4f46e5",
+            "icons": [
+                {
+                    "src": "https://cdn-icons-png.flaticon.com/512/591/591576.png",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "any maskable"
+                }
+            ]
         };
         const stringManifest = JSON.stringify(manifest);
         const blob = new Blob([stringManifest], { type: 'application/json' });
-        document.getElementById('pwa-manifest').setAttribute('href', URL.createObjectURL(blob));
+        const manifestURL = URL.createObjectURL(blob);
+        const link = document.createElement('link');
+        link.rel = 'manifest';
+        link.href = manifestURL;
+        document.head.appendChild(link);
 
-        // 2. Data persistence (LocalStorage)
-        let tasks = JSON.parse(localStorage.getItem('my-pwa-tasks')) || [];
+        // 2. Service Worker Registration (via Data URI for single file demo)
+        if ('serviceWorker' in navigator) {
+            const swCode = `
+                const CACHE_NAME = 'scheduler-v1';
+                const assets = [
+                    '/',
+                    'https://cdn.tailwindcss.com',
+                    'https://unpkg.com/lucide@latest'
+                ];
 
-        function saveTasks() {
-            localStorage.setItem('my-pwa-tasks', JSON.stringify(tasks));
-            renderTasks();
+                self.addEventListener('install', (event) => {
+                    event.waitUntil(
+                        caches.open(CACHE_NAME).then(cache => cache.addAll(assets))
+                    );
+                });
+
+                self.addEventListener('fetch', (event) => {
+                    event.respondWith(
+                        caches.match(event.request).then(response => {
+                            return response || fetch(event.request);
+                        })
+                    );
+                });
+            `;
+            const swBlob = new Blob([swCode], { type: 'text/javascript' });
+            const swUrl = URL.createObjectURL(swBlob);
+
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register(swUrl).then(reg => {
+                    console.log('SW Registered');
+                }).catch(err => console.log('SW Registration failed', err));
+            });
         }
+    </script>
 
-        // 3. UI Logic
+    <!-- App Logic -->
+    <script>
+        // State Management
+        let tasks = JSON.parse(localStorage.getItem('pwa_tasks')) || [];
+
+        // DOM Elements
+        const taskList = document.getElementById('taskList');
+        const taskInput = document.getElementById('taskInput');
+        const addBtn = document.getElementById('addBtn');
+        const pendingCount = document.getElementById('pendingCount');
+        const completedCount = document.getElementById('completedCount');
+        const currentDateEl = document.getElementById('currentDate');
+        const installBtn = document.getElementById('installBtn');
+
+        // Initial Setup
+        window.onload = () => {
+            const now = new Date();
+            const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            currentDateEl.innerText = now.toLocaleDateString('ja-JP', options);
+            renderTasks();
+            lucide.createIcons();
+        };
+
+        // Render function
         function renderTasks() {
-            const list = document.getElementById('taskList');
-            const emptyState = document.getElementById('emptyState');
-            list.innerHTML = '';
+            taskList.innerHTML = '';
 
             if (tasks.length === 0) {
-                emptyState.classList.remove('hidden');
+                taskList.innerHTML = `
+                    <div id="emptyState" class="text-center py-10 text-slate-400">
+                        <i data-lucide="inbox" class="mx-auto mb-2 opacity-20" size="48"></i>
+                        <p>予定がありません</p>
+                    </div>
+                `;
             } else {
-                emptyState.classList.add('hidden');
                 tasks.forEach((task, index) => {
-                    const li = document.createElement('li');
-                    li.className = `flex items-center justify-between p-4 bg-white rounded-2xl shadow-sm border-l-4 ${task.completed ? 'border-slate-300 opacity-60' : 'border-blue-500'} transition-all`;
-                    li.innerHTML = `
-                        <div class="flex items-center gap-3 flex-grow" onclick="toggleTask(${index})">
-                            <div class="w-6 h-6 rounded-full border-2 ${task.completed ? 'bg-green-500 border-green-500' : 'border-slate-300'} flex items-center justify-center">
-                                ${task.completed ? '<span class="text-white text-xs">✓</span>' : ''}
-                            </div>
-                            <span class="${task.completed ? 'line-through text-slate-400' : 'text-slate-700'} font-medium">${task.text}</span>
-                        </div>
-                        <button onclick="deleteTask(${index})" class="text-slate-300 hover:text-red-500 px-2 py-1 transition-colors">✕</button>
+                    const taskEl = document.createElement('div');
+                    taskEl.className = 'flex items-center gap-3 p-4 bg-white border border-slate-100 rounded-2xl shadow-sm hover:border-indigo-100 transition-all';
+                    taskEl.innerHTML = `
+                        <button onclick="toggleTask(${index})" class="w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${task.done ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300'}">
+                            ${task.done ? '<i data-lucide="check" size="14"></i>' : ''}
+                        </button>
+                        <span class="flex-grow font-medium ${task.done ? 'task-done' : ''}">${task.text}</span>
+                        <button onclick="deleteTask(${index})" class="text-slate-300 hover:text-red-500 transition-colors">
+                            <i data-lucide="trash-2" size="18"></i>
+                        </button>
                     `;
-                    list.appendChild(li);
+                    taskList.appendChild(taskEl);
                 });
+            }
+
+            // Update Stats
+            pendingCount.innerText = tasks.filter(t => !t.done).length;
+            completedCount.innerText = tasks.filter(t => t.done).length;
+
+            // Save & Re-init icons
+            localStorage.setItem('pwa_tasks', JSON.stringify(tasks));
+            lucide.createIcons();
+        }
+
+        // Actions
+        function addTask() {
+            const text = taskInput.value.trim();
+            if (text) {
+                tasks.push({ text, done: false });
+                taskInput.value = '';
+                renderTasks();
             }
         }
 
-        function addTask() {
-            const input = document.getElementById('taskInput');
-            if (input.value.trim() === '') return;
-            tasks.unshift({ text: input.value, completed: false });
-            input.value = '';
-            saveTasks();
-        }
-
         function toggleTask(index) {
-            tasks[index].completed = !tasks[index].completed;
-            saveTasks();
+            tasks[index].done = !tasks[index].done;
+            renderTasks();
         }
 
         function deleteTask(index) {
             tasks.splice(index, 1);
-            saveTasks();
+            renderTasks();
         }
 
-        // 4. Initial Load
-        window.onload = () => {
-            renderTasks();
-            const now = new Date();
-            document.getElementById('date-display').innerText = now.toLocaleDateString('ja-JP', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        // Event Listeners
+        addBtn.addEventListener('click', addTask);
+        taskInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') addTask();
+        });
 
-            // Register Service Worker for Offline
-            if ('serviceWorker' in navigator) {
-                const swCode = `
-                    self.addEventListener('install', (e) => {
-                        e.waitUntil(caches.open('pwa-v1').then(c => c.addAll(['/'])));
-                    });
-                    self.addEventListener('fetch', (e) => {
-                        e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
-                    });
-                `;
-                const swBlob = new Blob([swCode], { type: 'application/javascript' });
-                const swUrl = URL.createObjectURL(swBlob);
-                navigator.serviceWorker.register(swUrl).catch(err => console.log("SW registration failed", err));
-            }
-        };
-
-        // 5. Install Logic (A2HS)
+        // PWA Install Prompt handling
         let deferredPrompt;
         window.addEventListener('beforeinstallprompt', (e) => {
             e.preventDefault();
             deferredPrompt = e;
-            document.getElementById('installBanner').classList.remove('hidden');
+            installBtn.classList.remove('hidden');
         });
 
-        document.getElementById('installBtn').addEventListener('click', async () => {
+        installBtn.addEventListener('click', async () => {
             if (deferredPrompt) {
                 deferredPrompt.prompt();
                 const { outcome } = await deferredPrompt.userChoice;
                 if (outcome === 'accepted') {
-                    document.getElementById('installBanner').classList.add('hidden');
+                    installBtn.classList.add('hidden');
                 }
                 deferredPrompt = null;
             }
