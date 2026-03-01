@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mobile ToDo Pro</title>
+    <!-- Tailwind CSS for modern UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PWA Manifest Definition (Data URI) -->
+    <link rel="manifest" id="pwa-manifest">
+    <meta name="theme-color" content="#3b82f6">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            overscroll-behavior-y: contain;
+        }
+
+        .safe-area-bottom {
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 min-h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="bg-blue-600 text-white p-6 pt-12 shadow-lg sticky top-0 z-10">
+        <h1 class="text-2xl font-bold tracking-tight">My Tasks</h1>
+        <p class="text-blue-100 text-sm opacity-80" id="date-display"></p>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-grow p-4 space-y-4 mb-24">
+        <!-- Input Area -->
+        <div class="bg-white rounded-2xl shadow-sm p-4 border border-slate-100">
+            <div class="flex gap-2">
+                <input type="text" id="taskInput"
+                    class="flex-grow px-4 py-3 bg-slate-50 rounded-xl outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                    placeholder="新しいタスクを入力...">
+                <button onclick="addTask()"
+                    class="bg-blue-600 text-white px-5 py-3 rounded-xl font-semibold active:scale-95 transition-transform shadow-md">
+                    追加
+                </button>
+            </div>
+        </div>
+
+        <!-- Task List -->
+        <ul id="taskList" class="space-y-3">
+            <!-- Tasks will appear here -->
+        </ul>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="text-center py-10 hidden">
+            <div class="text-5xl mb-4">📝</div>
+            <p class="text-slate-400">タスクはありません</p>
+        </div>
+    </main>
+
+    <!-- App Install Banner (Custom) -->
+    <div id="installBanner"
+        class="fixed bottom-6 left-4 right-4 bg-slate-800 text-white p-4 rounded-2xl shadow-2xl flex items-center justify-between hidden z-50 transition-all transform translate-y-0">
+        <div class="flex items-center gap-3">
+            <div class="bg-blue-500 p-2 rounded-lg">📱</div>
+            <div>
+                <p class="font-bold text-sm">アプリをインストール</p>
+                <p class="text-xs text-slate-300">ホーム画面からすぐ起動</p>
+            </div>
+        </div>
+        <button id="installBtn" class="bg-blue-500 px-4 py-2 rounded-lg text-sm font-bold">追加</button>
+    </div>
+
+    <script>
+        // 1. Setup PWA Manifest dynamically
+        const manifest = {
+            "short_name": "ToDoPro",
+            "name": "Mobile ToDo Professional",
+            "icons": [
+                {
+                    "src": "https://cdn-icons-png.flaticon.com/512/4697/4697260.png",
+                    "type": "image/png",
+                    "sizes": "512x512",
+                    "purpose": "any maskable"
+                }
+            ],
+            "start_url": ".",
+            "display": "standalone",
+            "background_color": "#f8fafc",
+            "theme_color": "#2563eb"
+        };
+        const stringManifest = JSON.stringify(manifest);
+        const blob = new Blob([stringManifest], { type: 'application/json' });
+        document.getElementById('pwa-manifest').setAttribute('href', URL.createObjectURL(blob));
+
+        // 2. Data persistence (LocalStorage)
+        let tasks = JSON.parse(localStorage.getItem('my-pwa-tasks')) || [];
+
+        function saveTasks() {
+            localStorage.setItem('my-pwa-tasks', JSON.stringify(tasks));
+            renderTasks();
+        }
+
+        // 3. UI Logic
+        function renderTasks() {
+            const list = document.getElementById('taskList');
+            const emptyState = document.getElementById('emptyState');
+            list.innerHTML = '';
+
+            if (tasks.length === 0) {
+                emptyState.classList.remove('hidden');
+            } else {
+                emptyState.classList.add('hidden');
+                tasks.forEach((task, index) => {
+                    const li = document.createElement('li');
+                    li.className = `flex items-center justify-between p-4 bg-white rounded-2xl shadow-sm border-l-4 ${task.completed ? 'border-slate-300 opacity-60' : 'border-blue-500'} transition-all`;
+                    li.innerHTML = `
+                        <div class="flex items-center gap-3 flex-grow" onclick="toggleTask(${index})">
+                            <div class="w-6 h-6 rounded-full border-2 ${task.completed ? 'bg-green-500 border-green-500' : 'border-slate-300'} flex items-center justify-center">
+                                ${task.completed ? '<span class="text-white text-xs">✓</span>' : ''}
+                            </div>
+                            <span class="${task.completed ? 'line-through text-slate-400' : 'text-slate-700'} font-medium">${task.text}</span>
+                        </div>
+                        <button onclick="deleteTask(${index})" class="text-slate-300 hover:text-red-500 px-2 py-1 transition-colors">✕</button>
+                    `;
+                    list.appendChild(li);
+                });
+            }
+        }
+
+        function addTask() {
+            const input = document.getElementById('taskInput');
+            if (input.value.trim() === '') return;
+            tasks.unshift({ text: input.value, completed: false });
+            input.value = '';
+            saveTasks();
+        }
+
+        function toggleTask(index) {
+            tasks[index].completed = !tasks[index].completed;
+            saveTasks();
+        }
+
+        function deleteTask(index) {
+            tasks.splice(index, 1);
+            saveTasks();
+        }
+
+        // 4. Initial Load
+        window.onload = () => {
+            renderTasks();
+            const now = new Date();
+            document.getElementById('date-display').innerText = now.toLocaleDateString('ja-JP', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+            // Register Service Worker for Offline
+            if ('serviceWorker' in navigator) {
+                const swCode = `
+                    self.addEventListener('install', (e) => {
+                        e.waitUntil(caches.open('pwa-v1').then(c => c.addAll(['/'])));
+                    });
+                    self.addEventListener('fetch', (e) => {
+                        e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+                    });
+                `;
+                const swBlob = new Blob([swCode], { type: 'application/javascript' });
+                const swUrl = URL.createObjectURL(swBlob);
+                navigator.serviceWorker.register(swUrl).catch(err => console.log("SW registration failed", err));
+            }
+        };
+
+        // 5. Install Logic (A2HS)
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            document.getElementById('installBanner').classList.remove('hidden');
+        });
+
+        document.getElementById('installBtn').addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    document.getElementById('installBanner').classList.add('hidden');
+                }
+                deferredPrompt = null;
+            }
+        });
+    </script>
+</body>
+
+</html>
