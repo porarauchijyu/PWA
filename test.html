@@ -1,0 +1,351 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { 
+  Play, Copy, Info, AlertCircle, CheckCircle2, 
+  ChevronRight, Layout, GanttChartSquare, 
+  Clock, Zap, Target, Download, ImageIcon, FileDown,
+  ZoomIn, ZoomOut, Maximize, Loader2, ClipboardCheck, MousePointer2,
+  Layers, ListTree, CalendarDays, Calendar as CalendarIcon
+} from 'lucide-react';
+
+/**
+ * WBS-PERT Analyzer (Total Opportunity Slack Edition)
+ * - 余裕日数を「理論上の最短完了日」から「最遅完了日」までの期間として算出
+ * - ユーザーの入力した「予定日」に関わらず、論理的なバッファをすべて可視化
+ * - クリティカルパス（余裕最小の経路）を赤色でハイライト
+ */
+
+const App = () => {
+  const [input, setInput] = useState(
+    "ID | タスク名 | 開始日 | 終了日 | 期間(日) | 先行ID\n" +
+    "1 | 出欠確認 | 1/8 | 2/6 | 30 | \n" +
+    "2 | 議題確認 | 1/8 | 2/6 | 30 | \n" +
+    "3 | 議題収集 | 2/9 | 2/13 | 5 | 1,2\n" +
+    "4 | 資料作成 | 2/16 | 2/20 | 5 | 3\n" +
+    "5 | 資料配布 | 2/23 | 2/23 | 1 | 4\n" +
+    "6 | 進行次第作成 | 2/23 | 2/26 | 4 | 4\n" +
+    "7 | お茶購入 | 2/23 | 2/26 | 4 | 1\n" +
+    "8 | 幹事会当日 | 2/27 | 2/27 | 1 | 5,6,7"
+  );
+
+  const [error, setError] = useState(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [libStatus, setLibStatus] = useState({ htmlToImage: false, jsPdf: false });
+  const [copyStatus, setCopyStatus] = useState(null); 
+  const [scale, setScale] = useState(0.8);
+  
+  const chartRef = useRef(null);
+
+  // 日付解析（年補完＋ローカル時間）
+  const parseLocalDate = (dateStr) => {
+    if (!dateStr) return null;
+    const currentYear = new Date().getFullYear();
+    const cleanStr = dateStr.replace(/\s/g, '').replace(/\//g, '-');
+    const parts = cleanStr.split('-');
+    let d;
+    if (parts.length === 2) {
+      d = new Date(currentYear, parseInt(parts[0]) - 1, parseInt(parts[1]));
+    } else if (parts.length === 3) {
+      const year = parts[0].length === 2 ? 2000 + parseInt(parts[0]) : parseInt(parts[0]);
+      d = new Date(year, parseInt(parts[1]) - 1, parseInt(parts[2]));
+    } else return null;
+    d.setHours(0, 0, 0, 0);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const formatDate = (dateObj) => {
+    if (!dateObj || isNaN(dateObj.getTime())) return "----/--/--";
+    return `${dateObj.getFullYear()}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${String(dateObj.getDate()).padStart(2, '0')}`;
+  };
+
+  const getTargetDate = (baseDateStr, daysOffset) => {
+    const date = parseLocalDate(baseDateStr);
+    if (!date) return new Date();
+    date.setDate(date.getDate() + daysOffset);
+    return date;
+  };
+
+  useEffect(() => {
+    const loadScript = (id, src, key) => {
+      if (document.getElementById(id)) { setLibStatus(prev => ({ ...prev, [key]: true })); return; }
+      const script = document.createElement('script');
+      script.id = id; script.src = src; script.async = true;
+      script.onload = () => setLibStatus(prev => ({ ...prev, [key]: true }));
+      document.head.appendChild(script);
+    };
+    loadScript('html-to-image-script', 'https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js', 'htmlToImage');
+    loadScript('jspdf-script', 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'jsPdf');
+  }, []);
+
+  const analysisResult = useMemo(() => {
+    try {
+      const lines = input.split('\n').filter(l => {
+        const t = l.trim();
+        return t && !t.startsWith('#') && !(t.includes("ID") && (t.includes("タスク名") || t.includes("タスク")));
+      });
+      
+      const seenIds = new Set();
+      const rawData = [];
+      let allDates = [];
+
+      for (const line of lines) {
+        const parts = line.split('|').map(s => s?.trim());
+        const [id, rawName, startStr, endStr, durStr, predStr] = parts;
+        if (!id || seenIds.has(id)) continue;
+        seenIds.add(id);
+        const dStart = parseLocalDate(startStr);
+        const dEnd = parseLocalDate(endStr);
+        if (dStart) allDates.push(dStart.getTime());
+        if (dEnd) allDates.push(dEnd.getTime());
+        rawData.push({ id, rawName, dStart, dEnd, durStr, predStr });
+      }
+
+      const minTimestamp = allDates.length > 0 ? Math.min(...allDates) : new Date().setHours(0,0,0,0);
+      const baseDateObj = new Date(minTimestamp);
+      const baseDateStr = formatDate(baseDateObj);
+
+      // 1. タスク基礎構築
+      let tasks = rawData.map(item => {
+        const { id, rawName, dStart, dEnd, predStr } = item;
+        const hierarchyParts = rawName.split(/[／/]/).map(p => p.trim());
+        const cleanName = (hierarchyParts.length > 1 ? hierarchyParts[hierarchyParts.length - 1] : rawName).replace(/^[■●→]\s*/, "");
+        let duration = 0;
+        let plannedES = 0; 
+        if (dStart && dEnd) {
+          duration = Math.max(1, Math.round((dEnd.getTime() - dStart.getTime()) / 86400000) + 1);
+          plannedES = Math.round((dStart.getTime() - minTimestamp) / 86400000);
+        } else duration = parseInt(item.durStr) || 1;
+
+        return {
+          id, name: cleanName, parentContext: hierarchyParts.length > 1 ? hierarchyParts.slice(0, -1).join(' > ') : "",
+          category: hierarchyParts.length >= 3 ? "small" : hierarchyParts.length === 2 ? "medium" : rawName.startsWith("■") ? "large" : "normal",
+          duration, plannedES, plannedEF: plannedES + duration,
+          predecessors: predStr ? [...new Set(predStr.split(/[,,、]/).map(p => p.trim()).filter(p => p))] : [],
+          logicalES: 0, logicalEF: 0, logicalLS: 0, logicalLF: 0, level: 0
+        };
+      });
+
+      if (tasks.length === 0) return { tasks: [], taskMap: new Map(), projectMeta: { duration: 0, criticalPath: [], levels: [], width: 1200, height: 800, baseDateStr } };
+
+      const taskMap = new Map(tasks.map(t => [t.id, t]));
+
+      // 2. 論理 Forward Pass (最短日程)
+      let changed = true;
+      while (changed) {
+        changed = false;
+        tasks.forEach(t => {
+          let es = 0; 
+          if (t.predecessors.length > 0) {
+            const preds = t.predecessors.map(pId => taskMap.get(pId)).filter(Boolean);
+            if (preds.length > 0) es = Math.max(...preds.map(p => p.logicalEF));
+          }
+          if (t.logicalES !== es) { t.logicalES = es; changed = true; }
+          const level = t.predecessors.length > 0 ? Math.max(...t.predecessors.map(pId => (taskMap.get(pId)?.level || 0))) + 1 : 0;
+          if (t.level !== level) { t.level = level; changed = true; }
+          t.logicalEF = t.logicalES + t.duration;
+        });
+      }
+
+      // 3. 実務デッドラインに基づく Backward Pass
+      // ユーザーの入力最終日を絶対期限とする
+      const actualProjectFinish = Math.max(...tasks.map(t => t.plannedEF), 0);
+      tasks.forEach(t => { t.lf = actualProjectFinish; });
+      for (let i = 0; i < tasks.length; i++) {
+        tasks.forEach(t => {
+          const successors = tasks.filter(st => st.predecessors.includes(t.id));
+          if (successors.length > 0) t.lf = Math.min(...successors.map(st => st.ls));
+          t.ls = t.lf - t.duration;
+        });
+      }
+
+      // 4. 論理的な余裕（スラック）の算出
+      // 「全体の期限に間に合わせるために、最も早く終わる日から何日遅らせられるか」
+      tasks.forEach(t => {
+        // スラック = 最遅終了 - 最短終了（論理性基準）
+        t.slack = Math.max(0, t.lf - t.logicalEF);
+      });
+
+      // 5. クリティカルパス特定 (最小スラックを持つ経路)
+      const minSlack = Math.min(...tasks.map(t => t.slack));
+      const criticalPathIds = tasks.filter(t => t.slack <= minSlack + 0.001).map(t => t.id);
+
+      const levels = Array.from({ length: Math.max(...tasks.map(t => t.level), 0) + 1 }, (_, i) => tasks.filter(t => t.level === i));
+
+      setError(null);
+      return {
+        tasks, taskMap,
+        projectMeta: { 
+          duration: actualProjectFinish, criticalPath: criticalPathIds, levels, baseDateStr,
+          minSlack
+        }
+      };
+    } catch (err) { 
+      setError(err.message); 
+      return { tasks: [], taskMap: new Map(), projectMeta: { duration: 0, criticalPath: [], levels: [], width: 1200, height: 800, baseDateStr: "" } };
+    }
+  }, [input]);
+
+  const { tasks, taskMap, projectMeta } = analysisResult;
+
+  const nodePositions = useMemo(() => {
+    const positions = {};
+    if (!projectMeta.levels) return positions;
+    projectMeta.levels.forEach((levelTasks, colIndex) => {
+      levelTasks.forEach((task, rowIndex) => {
+        positions[task.id] = { x: colIndex * 400 + 100, y: rowIndex * 280 + 120 };
+      });
+    });
+    return positions;
+  }, [projectMeta.levels]);
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans flex flex-col overflow-hidden relative">
+      <div className="mx-auto w-full px-4 md:px-6 flex-1 flex flex-col overflow-hidden">
+        <header className="flex flex-col lg:flex-row items-center justify-between gap-6 mb-4 shrink-0 border-b border-slate-200 pb-4 pt-4">
+          <div className="flex items-center gap-4">
+            <div className="bg-rose-600 p-2.5 rounded-2xl shadow-lg"><Zap className="text-white" size={24} /></div>
+            <div>
+              <h1 className="text-xl font-black tracking-tight">WBS-PERT Analyzer</h1>
+              <p className="text-slate-500 font-medium text-[11px] mt-1 flex items-center gap-1">
+                <Target size={12} className="text-rose-600" />
+                <span>論理スラック計算：理論上の最短完了日を基準に、真の余裕日数を算出します</span>
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap justify-center gap-4">
+            <div className="bg-white border border-slate-200 px-5 py-2 rounded-2xl shadow-sm flex items-center gap-3">
+               <CalendarIcon size={16} className="text-rose-500" />
+               <div>
+                 <span className="block text-[8px] text-slate-400 font-bold uppercase tracking-widest text-center">開始基準</span>
+                 <span className="text-xs font-black text-slate-800">{projectMeta.baseDateStr}</span>
+               </div>
+            </div>
+            <StatCard icon={<Clock className="text-rose-600"/>} label="全体完了予定" value={formatDate(getTargetDate(projectMeta.baseDateStr, projectMeta.duration - 1))} color="rose" />
+            <button onClick={async () => {
+              if (!libStatus.htmlToImage || !libStatus.jsPdf || !chartRef.current) return;
+              setIsExporting(true);
+              try {
+                const width = (projectMeta.levels?.length || 0) * 400 + 200;
+                const height = Math.max(...(projectMeta.levels?.map(l => l.length) || [1])) * 280 + 200;
+                const dataUrl = await window.htmlToImage.toPng(chartRef.current, { backgroundColor: '#ffffff', width, height, pixelRatio: 2.0, style: { transform: 'none', boxShadow: 'none', borderRadius: '0', margin: '0', padding: '20px' } });
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF(width > height ? 'l' : 'p', 'px', [width + 40, height + 40]);
+                pdf.addImage(dataUrl, 'PNG', 0, 0, width + 40, height + 40, undefined, 'FAST');
+                pdf.save('wbs_total_slack_pert.pdf');
+              } finally { setIsExporting(false); }
+            }} className="bg-slate-800 text-white px-5 py-2.5 rounded-xl shadow-md active:scale-95 text-xs font-bold flex items-center gap-2 hover:bg-slate-900 transition-all">
+              <FileDown size={16} /> PDF保存
+            </button>
+          </div>
+        </header>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1 overflow-hidden pb-4">
+          <div className="lg:col-span-3 xl:col-span-2 flex flex-col gap-4 overflow-hidden">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex-1 flex flex-col min-h-[300px]">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><GanttChartSquare size={14} /> Data</h2>
+                <button onClick={() => { navigator.clipboard.writeText(input); setCopyStatus('copied'); setTimeout(()=>setCopyStatus(null),2000); }} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400">
+                  {copyStatus === 'copied' ? <ClipboardCheck size={14} className="text-green-600" /> : <Copy size={14} />}
+                </button>
+              </div>
+              <textarea value={input} onChange={(e) => setInput(e.target.value)} className="flex-1 w-full p-3 font-mono text-[10px] bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-rose-100 outline-none resize-none transition-all shadow-inner" spellCheck="false" />
+            </div>
+          </div>
+
+          <div className="lg:col-span-9 xl:col-span-10 flex flex-col h-full overflow-hidden">
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm flex-1 flex flex-col relative overflow-hidden">
+              <div className="absolute top-6 left-6 z-20 flex items-center gap-1 bg-white/95 border border-slate-200 rounded-full px-2 py-1 shadow-sm">
+                <button onClick={() => setScale(Math.max(0.05, scale - 0.05))} className="p-1 hover:bg-slate-100 rounded-full text-slate-500"><ZoomOut size={14}/></button>
+                <span className="text-[10px] font-bold w-12 text-center tabular-nums">{Math.round(scale * 100)}%</span>
+                <button onClick={() => setScale(Math.min(2.0, scale + 0.05))} className="p-1 hover:bg-slate-100 rounded-full text-slate-500"><ZoomIn size={14}/></button>
+                <button onClick={() => setScale(0.8)} className="p-1 hover:bg-slate-100 rounded-full text-slate-500"><Maximize size={14}/></button>
+              </div>
+
+              {error ? <div className="flex-1 flex flex-col items-center justify-center text-rose-500 p-10 font-bold">{error}</div> : (
+                <div className="flex-1 overflow-auto bg-slate-100/30 p-4 custom-scrollbar">
+                  <div ref={chartRef} className="relative bg-white transition-transform duration-200 origin-top-left" style={{ width: `${(projectMeta.levels?.length || 0) * 400 + 200}px`, height: `${Math.max(...(projectMeta.levels?.map(l => l.length) || [1])) * 280 + 200}px`, transform: `scale(${scale})`, borderRadius: '24px' }}>
+                    <svg className="absolute inset-0 pointer-events-none" width="100%" height="100%">
+                      <defs>
+                        <marker id="arrow-normal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#cbd5e1" /></marker>
+                        <marker id="arrow-critical" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#f43f5e" /></marker>
+                      </defs>
+                      {tasks.map(task => task.predecessors.map(pId => {
+                        const from = nodePositions[pId]; const to = nodePositions[task.id];
+                        if (!from || !to) return null;
+                        const isCriticalEdge = projectMeta.criticalPath.includes(task.id) && projectMeta.criticalPath.includes(pId);
+                        return (
+                          <g key={`${pId}-${task.id}`}>
+                            {isCriticalEdge && <path d={`M ${from.x + 260} ${from.y + 100} C ${from.x + 330} ${from.y + 100}, ${to.x - 70} ${to.y + 100}, ${to.x} ${to.y + 100}`} fill="none" stroke="#fecdd3" strokeWidth={8} opacity="0.5" />}
+                            <path d={`M ${from.x + 260} ${from.y + 100} C ${from.x + 330} ${from.y + 100}, ${to.x - 70} ${to.y + 100}, ${to.x} ${to.y + 100}`} fill="none" stroke={isCriticalEdge ? "#f43f5e" : "#cbd5e1"} strokeWidth={isCriticalEdge ? 2.5 : 1.2} strokeDasharray={isCriticalEdge ? "0" : "5,5"} markerEnd={isCriticalEdge ? "url(#arrow-critical)" : "url(#arrow-normal)"} />
+                          </g>
+                        );
+                      }))}
+                    </svg>
+                    <div className="relative z-10">{tasks.map(task => (
+                      <TaskNode key={task.id} task={task} pos={nodePositions[task.id]} isCritical={projectMeta.criticalPath.includes(task.id)} baseDateStr={projectMeta.baseDateStr} formatDate={formatDate} getTargetDate={getTargetDate} minSlack={projectMeta.minSlack} />
+                    ))}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+      <style dangerouslySetInnerHTML={{ __html: `.custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; } .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }`}} />
+    </div>
+  );
+};
+
+const TaskNode = ({ task, pos, isCritical, baseDateStr, formatDate, getTargetDate, minSlack }) => {
+  if (!pos) return null;
+  const styles = { large: "border-slate-800 border-l-[12px] border-l-slate-800", medium: "border-slate-400 border-l-[8px] border-l-blue-400", small: "border-slate-200 border-l-[4px] border-l-slate-300", normal: "border-slate-200 border-l-[4px] border-l-slate-200" };
+  
+  // 予定（表示用）
+  const plannedStart = getTargetDate(baseDateStr, task.plannedES);
+  const plannedFinish = getTargetDate(baseDateStr, task.plannedEF - 1);
+  
+  // 理論上の最短（ツール内部計算基準）
+  const logicalEarliestFinish = getTargetDate(baseDateStr, task.logicalEF - 1);
+  
+  // 最遅（全体の納期を守る限界）
+  const latestFinish = getTargetDate(baseDateStr, task.lf - 1);
+
+  // 余裕日数の表示：クリティカルパス上のタスクは 0 と表示し、それ以外は理論上のバッファを表示
+  const displaySlack = isCritical ? 0 : Math.max(0, Math.round(task.slack - minSlack));
+
+  return (
+    <div className={`absolute w-[260px] rounded-2xl overflow-hidden border-2 transition-all bg-white ${styles[task.category] || styles.normal} ${isCritical ? 'ring-4 ring-rose-500/20 border-rose-500 shadow-xl' : ''}`} style={{ left: pos.x, top: pos.y }}>
+      <div className={`grid grid-cols-3 text-[9px] font-bold text-center border-b border-slate-50 bg-slate-50/30`}>
+        <div className="py-2 border-r border-slate-100 px-1"><span className="block text-[7px] text-slate-400 font-black opacity-70 uppercase tracking-tighter">予定開始</span><span className="text-slate-700">{formatDate(plannedStart)}</span></div>
+        <div className={`py-2 border-r border-slate-100 px-1 ${isCritical ? 'text-rose-600' : 'text-indigo-600'}`}><span className="block text-[7px] text-slate-400 font-black opacity-70 uppercase tracking-tighter">期間</span><span className="font-black underline decoration-1">{task.duration}日</span></div>
+        <div className="py-2 text-slate-400 px-1"><span className="block text-[7px] text-slate-400 font-black opacity-70 uppercase tracking-tighter">予定終了</span><span className="text-slate-700">{formatDate(plannedFinish)}</span></div>
+      </div>
+      <div className="p-4 min-h-[90px] flex flex-col items-center justify-center text-center bg-white relative px-4">
+        {task.parentContext && <div className="absolute top-2 left-4 right-4 flex items-center gap-1 opacity-40 overflow-hidden whitespace-nowrap text-left text-[8px] font-bold uppercase"><ListTree size={10} />{task.parentContext}</div>}
+        {isCritical && <div className="absolute top-1 right-2 flex items-center gap-1 bg-rose-500 text-white px-2 py-0.5 rounded-full shadow-lg animate-pulse z-20"><AlertCircle size={8} /><span className="text-[7px] font-black tracking-tighter">最優先</span></div>}
+        <h4 className={`text-[12px] font-black leading-tight max-w-full text-slate-800 mt-2`}>{task.name}</h4>
+      </div>
+      <div className={`grid grid-cols-3 text-[9px] font-bold text-center border-t border-slate-50 bg-slate-50/20`}>
+        <div className="py-2 border-r border-slate-100 text-slate-400 px-1">
+          <span className="block text-[7px] font-black opacity-70 uppercase tracking-tighter">余裕</span>
+          <span className={`text-sm ${isCritical ? 'text-rose-600 font-black' : 'font-bold text-slate-500'}`}>{displaySlack}日</span>
+        </div>
+        <div className="py-2 border-r border-slate-100 text-slate-400 px-1 col-span-2 bg-rose-50/30">
+          <div className="flex flex-col items-center justify-center">
+            <span className="block text-[7px] font-black opacity-90 uppercase tracking-tighter text-rose-600">最遅完了日（期限）</span>
+            <span className="tabular-nums font-black text-slate-800 text-[10px]">{formatDate(latestFinish)}</span>
+          </div>
+        </div>
+      </div>
+      <div className={`absolute top-0 left-0 px-2 py-1 rounded-br-xl text-[8px] font-black border-r border-b border-inherit bg-slate-800 text-white shadow-sm`}>#{task.id}</div>
+    </div>
+  );
+};
+
+const StatCard = ({ icon, label, value, color }) => (
+  <div className={`bg-white border px-4 py-2 rounded-2xl flex items-center gap-4 shadow-sm min-w-[180px] border-slate-200`}>
+    <div className={`p-2 rounded-xl text-white bg-${color}-600`}>{icon}</div>
+    <div><span className="block text-[9px] text-slate-400 font-black uppercase tracking-widest mb-0.5">{label}</span><span className="text-sm font-black text-slate-900 leading-none tabular-nums">{value}</span></div>
+  </div>
+);
+
+export default App;
